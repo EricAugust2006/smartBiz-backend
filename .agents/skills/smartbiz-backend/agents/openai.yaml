@@ -1,0 +1,3 @@
+interface:
+  display_name: "SmartBiz Backend"
+  short_description: "NestJS e Prisma com isolamento por tenant no SmartBiz"
