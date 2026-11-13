@@ -5,7 +5,9 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '@database/prisma.service';
 import { RegisterDto } from '@modules/auth/dto/register.dto';
 import { B2B_JWT_TTL_SECONDS } from '@modules/auth/jwt.config';
+import { B2C_JWT_TTL_SECONDS } from '@modules/auth/jwt.config';
 import { PasswordService } from '@modules/auth/password.service';
+import { B2cLoginDto } from '@modules/auth/dto/b2c-login.dto';
 
 @Injectable()
 export class AuthService {
@@ -90,6 +92,34 @@ export class AuthService {
       access_token,
       user: publicUser,
       tenant: user.tenant,
+    };
+  }
+
+  async loginB2c(dto: B2cLoginDto) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { slug: dto.tenantSlug },
+      select: { id: true, name: true, slug: true },
+    });
+    if (!tenant) throw new UnauthorizedException('Invalid store or customer details.');
+
+    const customer = await this.prisma.customer.upsert({
+      where: { tenantId_phone: { tenantId: tenant.id, phone: dto.phone } },
+      update: { name: dto.name.trim() },
+      create: { tenantId: tenant.id, name: dto.name.trim(), phone: dto.phone },
+      select: { id: true, tenantId: true, name: true, phone: true, points: true, createdAt: true },
+    });
+    const access_token = await this.jwt.signAsync({
+      sub: customer.id,
+      tenantId: tenant.id,
+      role: 'B2C',
+    }, { expiresIn: B2C_JWT_TTL_SECONDS, algorithm: 'HS256' });
+
+    return {
+      access_token,
+      token_type: 'Bearer',
+      expires_in: B2C_JWT_TTL_SECONDS,
+      customer,
+      tenant,
     };
   }
 }

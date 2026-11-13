@@ -10,10 +10,12 @@ import { CustomersModule } from '@modules/customers/customers.module';
 import { SalesModule } from '@modules/sales/sales.module';
 import { InventoryModule } from '@modules/inventory/inventory.module';
 import { MissionsModule } from '@modules/missions/missions.module';
+import { ProductsModule } from '@modules/products/products.module';
 import { AiCopilotModule } from '@modules/ai-copilot/ai-copilot.module';
 import { WhatsappModule } from '@modules/whatsapp/whatsapp.module';
 import { LoyaltyModule } from '@modules/loyalty/loyalty.module';
 import { B2cDashboardModule } from '@modules/b2c-dashboard/b2c-dashboard.module';
+import { DashboardModule } from '@modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -32,8 +34,10 @@ import { B2cDashboardModule } from '@modules/b2c-dashboard/b2c-dashboard.module'
     SalesModule,
     LoyaltyModule,
     B2cDashboardModule,
+    DashboardModule,
     InventoryModule,
     MissionsModule,
+    ProductsModule,
     AiCopilotModule,
     WhatsappModule,
   ],

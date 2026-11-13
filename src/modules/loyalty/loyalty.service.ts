@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { CustomerMissionStatus, GoalType, MissionStatus, Prisma } from '@prisma/client';
 import { requireTenant } from '@common/utils/require-tenant';
 import { PrismaService } from '@database/prisma.service';
@@ -11,6 +11,8 @@ const TRANSACTION_ATTEMPTS = 5;
 type LoyaltySale = Prisma.TransactionGetPayload<{
   select: { id: true; customerId: true; amount: true; createdAt: true };
 }>;
+
+type MissionVisit = Pick<LoyaltySale, 'createdAt'>;
 
 export type LoyaltyResult =
   | { status: 'already_processed' }
@@ -30,6 +32,55 @@ export class LoyaltyService {
           (database) => this.applyEvent(tenantId, database, eventId),
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
+      } catch (error: unknown) {
+        const conflict = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+        if (!conflict || attempt >= TRANSACTION_ATTEMPTS - 1) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10 * 2 ** attempt));
+      }
+    }
+  }
+
+  async recordStoreVisit(tenantId: string, customerId: string) {
+    requireTenant(tenantId);
+    if (typeof customerId !== 'string' || !customerId.trim()) throw new UnauthorizedException();
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (database) => {
+          const customer = await database.customer.findFirst({
+            where: { tenantId, id: customerId }, select: { id: true },
+          });
+          if (!customer) throw new NotFoundException('Customer not found.');
+
+          const now = new Date();
+          const cutoff = new Date(now.getTime() - COOLDOWN_MS);
+          const [previousVisit, previousSaleVisit] = await Promise.all([
+            database.storeVisit.findFirst({
+              where: { tenantId, customerId, createdAt: { gte: cutoff, lte: now } },
+              select: { createdAt: true }, orderBy: { createdAt: 'desc' },
+            }),
+            database.transaction.findFirst({
+              where: {
+                tenantId, customerId, type: 'SALE', createdAt: { gte: cutoff, lte: now },
+                pointsLedger: { is: { tenantId, visitCounted: true } },
+              },
+              select: { createdAt: true }, orderBy: { createdAt: 'desc' },
+            }),
+          ]);
+          const lastVisitAt = [previousVisit?.createdAt, previousSaleVisit?.createdAt]
+            .filter((date): date is Date => date !== undefined)
+            .sort((left, right) => right.getTime() - left.getTime())[0];
+          if (lastVisitAt) {
+            return {
+              status: 'cooldown' as const,
+              nextAllowedAt: new Date(lastVisitAt.getTime() + COOLDOWN_MS + 1).toISOString(),
+            };
+          }
+
+          await database.storeVisit.create({ data: { tenantId, customerId, createdAt: now } });
+          await this.advanceMissions(tenantId, database, { createdAt: now }, customerId);
+          return { status: 'checked_in' as const, visitAt: now.toISOString() };
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       } catch (error: unknown) {
         const conflict = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
         if (!conflict || attempt >= TRANSACTION_ATTEMPTS - 1) throw error;
@@ -82,7 +133,7 @@ export class LoyaltyService {
     if (!customer) throw new NotFoundException('Customer not found.');
     if (credited.count !== 1) throw new BadRequestException('Points exceed the supported integer balance.');
 
-    const previousSale = await database.transaction.findFirst({
+    const [previousSale, previousVisit] = await Promise.all([database.transaction.findFirst({
       where: {
         tenantId, customerId: sale.customerId, type: 'SALE',
         createdAt: { gte: new Date(sale.createdAt.getTime() - COOLDOWN_MS) },
@@ -97,9 +148,21 @@ export class LoyaltyService {
         ],
       },
       select: { id: true },
-    });
-    const visitCounted = previousSale === null;
-    if (visitCounted) await this.advanceMissions(tenantId, database, sale, sale.customerId);
+    }), database.storeVisit.findFirst({
+      where: {
+        tenantId, customerId: sale.customerId,
+        createdAt: {
+          gte: new Date(sale.createdAt.getTime() - COOLDOWN_MS),
+          lte: new Date(sale.createdAt.getTime() + COOLDOWN_MS),
+        },
+      },
+      select: { id: true },
+    })]);
+    const visitCounted = previousSale === null && previousVisit === null;
+    if (visitCounted) {
+      await database.storeVisit.create({ data: { tenantId, customerId: sale.customerId, createdAt: sale.createdAt } });
+      await this.advanceMissions(tenantId, database, sale, sale.customerId);
+    }
 
     await database.pointsLedger.create({
       data: {
@@ -114,7 +177,7 @@ export class LoyaltyService {
   private async advanceMissions(
     tenantId: string,
     database: Prisma.TransactionClient,
-    sale: LoyaltySale,
+    sale: MissionVisit,
     customerId: string,
   ): Promise<void> {
     const missions = await database.mission.findMany({

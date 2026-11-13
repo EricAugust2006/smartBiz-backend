@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
-    "test": "node --test -r ts-node/register/transpile-only -r ./scripts/register-aliases.cjs test/auth-tenant.e2e-spec.ts test/auth-postgres.integration-spec.ts test/customers-sales.e2e-spec.ts test/sales-postgres.integration-spec.ts test/loyalty.spec.ts test/loyalty-postgres.integration-spec.ts test/missions.e2e-spec.ts test/b2c-dashboard.e2e-spec.ts",
+    "test": "node --test -r ts-node/register/transpile-only -r ./scripts/register-aliases.cjs test/auth-tenant.e2e-spec.ts test/auth-postgres.integration-spec.ts test/customers-sales.e2e-spec.ts test/sales-postgres.integration-spec.ts test/loyalty.spec.ts test/loyalty-postgres.integration-spec.ts test/missions.e2e-spec.ts test/products.e2e-spec.ts test/b2c-dashboard.e2e-spec.ts",
     "test:types": "tsc --project tsconfig.test.json",
     "format": "prettier --write \"src/**/*.ts\"",
     "postinstall": "prisma generate",

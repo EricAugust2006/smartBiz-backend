@@ -4,6 +4,7 @@ import { JwtModuleOptions } from '@nestjs/jwt';
 type ConfigReader = Pick<ConfigService, 'get'>;
 
 export const B2B_JWT_TTL_SECONDS = 24 * 60 * 60;
+export const B2C_JWT_TTL_SECONDS = 24 * 60 * 60;
 
 export function getJwtSecret(config: ConfigReader): string {
   const secret = config.get<string>('JWT_SECRET');

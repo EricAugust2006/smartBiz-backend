@@ -31,7 +31,7 @@ test('sales constraints, concurrency and rollback on PostgreSQL', {
       data: {
         id: tenantId, name: 'Sales integration test', slug: `sales-test-${tenantId}`,
         users: { create: { name: 'Staff', email: `${tenantId}@example.test`, passwordHash: 'test-only', role: 'STAFF' } },
-        products: { create: { name: 'Café', category: 'Bebida', quantity: 20, costPrice: 0.05, sellPrice: 0.1 } },
+        products: { create: { name: 'Café', category: 'Bebida', price: 0.1, quantity: 20, costPrice: 0.05 } },
       },
       include: { users: true, products: true },
     });

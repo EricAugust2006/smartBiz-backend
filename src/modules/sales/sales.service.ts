@@ -1,8 +1,11 @@
 import {
-  BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException,
+  BadRequestException, ConflictException, Injectable, NotFoundException, Optional, UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { getJwtSecret } from '@modules/auth/jwt.config';
+import { createB2cScanUrl, createSaleRedemptionToken } from '@common/utils/b2c-qr';
 import { requireTenant } from '../../common/utils/require-tenant';
 import { PrismaService } from '../../database/prisma.service';
 import { normalizePhone } from '../customers/customer-identifiers';
@@ -18,11 +21,16 @@ const saleSelect = {
   },
 } satisfies Prisma.TransactionSelect;
 
+const SALE_QR_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_B2C_APP_URL = 'http://localhost:3000';
+
 @Injectable()
 export class SalesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly customers: CustomersService,
+    @Optional()
+    private readonly config?: ConfigService,
   ) {}
 
   async create(tenantId: string, userId: string, dto: CreateSaleDto) {
@@ -95,6 +103,29 @@ export class SalesService {
           select: saleSelect,
         });
 
+        if (!customer) {
+          const tenant = await database.tenant.findUnique({
+            where: { id: tenantId }, select: { slug: true },
+          });
+          if (!tenant) throw new NotFoundException('Store not found.');
+          const redemptionId = randomUUID();
+          const expiresAt = new Date(sale.createdAt.getTime() + SALE_QR_TTL_MS);
+          await database.saleRedemption.create({
+            data: { id: redemptionId, tenantId, transactionId: sale.id, expiresAt },
+          });
+          const token = createSaleRedemptionToken(
+            getJwtSecret(this.qrConfig()), redemptionId, tenantId, sale.id, expiresAt,
+          );
+          const appUrl = this.qrConfig().get<string>('B2C_APP_URL') ?? DEFAULT_B2C_APP_URL;
+          return {
+            ...sale,
+            redemption: {
+              url: createB2cScanUrl(appUrl, tenant.slug, 'sale', token),
+              expiresAt: expiresAt.toISOString(),
+            },
+          };
+        }
+
         if (customer) {
           // The future loyalty consumer must credit this sale once, independently of mission cooldowns.
           await database.outboxEvent.create({
@@ -121,7 +152,7 @@ export class SalesService {
   }
 
   private async findReplay(
-    database: Pick<Prisma.TransactionClient, 'transaction'>,
+    database: Pick<Prisma.TransactionClient, 'transaction' | 'saleRedemption' | 'tenant'>,
     tenantId: string,
     idempotencyKey: string,
     requestHash: string,
@@ -134,6 +165,30 @@ export class SalesService {
       throw new ConflictException('Idempotency key was already used for a different sale.');
     }
     const { requestHash: _hash, ...sale } = existing;
-    return sale;
+    if (sale.customerId !== null) return sale;
+
+    const [redemption, tenant] = await Promise.all([
+      database.saleRedemption.findFirst({
+        where: { tenantId, transactionId: sale.id }, select: { id: true, expiresAt: true },
+      }),
+      database.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } }),
+    ]);
+    if (!redemption || !tenant) return sale;
+    const token = createSaleRedemptionToken(
+      getJwtSecret(this.qrConfig()), redemption.id, tenantId, sale.id, redemption.expiresAt,
+    );
+    const appUrl = this.qrConfig().get<string>('B2C_APP_URL') ?? DEFAULT_B2C_APP_URL;
+    return {
+      ...sale,
+      redemption: {
+        url: createB2cScanUrl(appUrl, tenant.slug, 'sale', token),
+        expiresAt: redemption.expiresAt.toISOString(),
+      },
+    };
+  }
+
+  private qrConfig(): ConfigService {
+    if (!this.config) throw new Error('ConfigService is required to issue sale QR codes.');
+    return this.config;
   }
 }

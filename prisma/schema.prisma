@@ -51,6 +51,8 @@ model Tenant {
   missions     Mission[]
   transactions Transaction[]
   pointsLedger PointsLedger[]
+  storeVisits StoreVisit[]
+  saleRedemptions SaleRedemption[]
 
   @@map("tenants")
 }
@@ -86,6 +88,8 @@ model Customer {
   missions     CustomerMission[]
   transactions Transaction[]
   pointsLedger PointsLedger[]
+  storeVisits StoreVisit[]
+  saleRedemptions SaleRedemption[] @relation("SaleRedemptionRedeemedBy")
 
   @@unique([tenantId, phone])
   @@unique([tenantId, cpf])
@@ -98,10 +102,11 @@ model Product {
   tenantId       String
   name           String
   category       String
-  quantity       Int
+  price          Decimal   @db.Decimal(10, 2)
+  isActive       Boolean   @default(true)
+  quantity       Int       @default(0)
   minQuantity    Int       @default(5)
-  costPrice      Float
-  sellPrice      Float
+  costPrice      Float     @default(0)
   expirationDate DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -168,6 +173,7 @@ model Transaction {
   items        TransactionItem[]
   events       OutboxEvent[]
   pointsLedger PointsLedger?
+  saleRedemption SaleRedemption?
 
   @@unique([tenantId, id])
   @@unique([tenantId, idempotencyKey])
@@ -235,4 +241,37 @@ model PointsLedger {
   @@unique([tenantId, eventId])
   @@index([tenantId, customerId, createdAt])
   @@map("points_ledger")
+}
+
+model StoreVisit {
+  id         String   @id @default(uuid())
+  tenantId   String
+  customerId String
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, customerId, createdAt])
+  @@map("store_visits")
+}
+
+model SaleRedemption {
+  id                   String    @id @default(uuid())
+  tenantId             String
+  transactionId        String
+  expiresAt            DateTime
+  redeemedAt           DateTime?
+  redeemedByCustomerId String?
+  createdAt            DateTime  @default(now())
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [tenantId, transactionId], references: [tenantId, id], onDelete: Cascade, onUpdate: NoAction)
+  redeemedBy Customer?    @relation("SaleRedemptionRedeemedBy", fields: [tenantId, redeemedByCustomerId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, transactionId])
+  @@index([tenantId, expiresAt, redeemedAt])
+  @@map("sale_redemptions")
 }

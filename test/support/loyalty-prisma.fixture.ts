@@ -22,6 +22,7 @@ interface LedgerRow {
   tenantId: string; customerId: string; transactionId: string; eventId: string;
   points: number; balanceAfter: number; visitCounted: boolean;
 }
+interface StoreVisitRow { id: string; tenantId: string; customerId: string; createdAt: Date }
 
 function inScope(tenantId: string, where: { tenantId?: unknown } | undefined): boolean {
   if (typeof where?.tenantId !== 'string' || !where.tenantId) throw new Error('Unscoped business query');
@@ -87,7 +88,7 @@ export function loyaltyFixture() {
   const state = {
     customers: [{ id: customerId, tenantId, points: 0 }] as CustomerRow[],
     sales: [] as SaleRow[], events: [] as EventRow[], missions: [] as MissionRow[],
-    progress: [] as ProgressRow[], ledger: [] as LedgerRow[],
+    progress: [] as ProgressRow[], ledger: [] as LedgerRow[], storeVisits: [] as StoreVisitRow[],
     failLedger: false, conflicts: 0, transactionAttempts: 0,
   };
 
@@ -122,6 +123,22 @@ export function loyaltyFixture() {
     transaction: {
       findFirst: async (args: Prisma.TransactionFindFirstArgs) => state.sales.find((row) =>
         inScope(row.tenantId, args.where) && matchesSale(row, args.where ?? {}, state.ledger)) ?? null,
+    },
+    storeVisit: {
+      findFirst: async (args: Prisma.StoreVisitFindFirstArgs) => state.storeVisits.find((row) =>
+        inScope(row.tenantId, args.where) && textMatches(row.customerId, args.where?.customerId) &&
+        dateMatches(row.createdAt, args.where?.createdAt)) ?? null,
+      create: async (args: Prisma.StoreVisitCreateArgs) => {
+        const data = args.data;
+        if (!data.tenantId || !data.customerId || !(data.createdAt instanceof Date)) {
+          throw new Error('Missing store visit data');
+        }
+        const row: StoreVisitRow = {
+          id: randomUUID(), tenantId: data.tenantId, customerId: data.customerId, createdAt: data.createdAt,
+        };
+        state.storeVisits.push(row);
+        return row;
+      },
     },
     customer: {
       updateMany: async (args: Prisma.CustomerUpdateManyArgs) => {
@@ -197,6 +214,7 @@ export function loyaltyFixture() {
       const snapshot = {
         customers: state.customers.map((row) => ({ ...row })), events: state.events.map((row) => ({ ...row })),
         progress: state.progress.map((row) => ({ ...row })), ledger: [...state.ledger],
+        storeVisits: state.storeVisits.map((row) => ({ ...row })),
       };
       try {
         return await callback(models);

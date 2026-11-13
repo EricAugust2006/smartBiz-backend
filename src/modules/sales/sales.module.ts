@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from '../../database/database.module';
 import { AuthModule } from '../auth/auth.module';
 import { CustomersModule } from '../customers/customers.module';
@@ -6,7 +7,7 @@ import { SalesController } from './sales.controller';
 import { SalesService } from './sales.service';
 
 @Module({
-  imports: [DatabaseModule, AuthModule, CustomersModule],
+  imports: [ConfigModule, DatabaseModule, AuthModule, CustomersModule],
   controllers: [SalesController],
   providers: [SalesService],
   exports: [SalesService],

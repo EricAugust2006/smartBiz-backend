@@ -1,0 +1,9 @@
+ALTER TABLE "products" RENAME COLUMN "sellPrice" TO "price";
+
+ALTER TABLE "products"
+  ALTER COLUMN "price" TYPE DECIMAL(10, 2) USING "price"::DECIMAL(10, 2),
+  ALTER COLUMN "quantity" SET DEFAULT 0,
+  ALTER COLUMN "costPrice" SET DEFAULT 0;
+
+ALTER TABLE "products"
+  ADD COLUMN "isActive" BOOLEAN NOT NULL DEFAULT true;
