@@ -8,7 +8,6 @@ import { AuthModule } from '@modules/auth/auth.module';
 import { TenantsModule } from '@modules/tenants/tenants.module';
 import { CustomersModule } from '@modules/customers/customers.module';
 import { SalesModule } from '@modules/sales/sales.module';
-import { InventoryModule } from '@modules/inventory/inventory.module';
 import { MissionsModule } from '@modules/missions/missions.module';
 import { ProductsModule } from '@modules/products/products.module';
 import { AiCopilotModule } from '@modules/ai-copilot/ai-copilot.module';
@@ -35,7 +34,6 @@ import { DashboardModule } from '@modules/dashboard/dashboard.module';
     LoyaltyModule,
     B2cDashboardModule,
     DashboardModule,
-    InventoryModule,
     MissionsModule,
     ProductsModule,
     AiCopilotModule,

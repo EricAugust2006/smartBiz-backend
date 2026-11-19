@@ -104,10 +104,11 @@ model Product {
   category       String
   price          Decimal   @db.Decimal(10, 2)
   isActive       Boolean   @default(true)
-  quantity       Int       @default(0)
-  minQuantity    Int       @default(5)
-  costPrice      Float     @default(0)
-  expirationDate DateTime?
+  quantity       Decimal   @default(0) @db.Decimal(12, 3)
+  minQuantity    Decimal   @default(5) @db.Decimal(12, 3)
+  costPrice      Decimal   @default(0) @db.Decimal(10, 2)
+  expiresAt      DateTime?
+  trackStock     Boolean   @default(true)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -186,13 +187,13 @@ model TransactionItem {
   id            String  @id @default(uuid())
   tenantId      String
   transactionId String
-  productId     String
+  productId     String?
   name          String
-  quantity      Int
+  quantity      Decimal @db.Decimal(12, 3)
   unitPrice     Decimal @db.Decimal(12, 2)
 
   transaction Transaction @relation(fields: [tenantId, transactionId], references: [tenantId, id], onDelete: Cascade, onUpdate: NoAction)
-  product     Product     @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  product     Product?    @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([tenantId, transactionId, productId])
   @@index([tenantId, productId])

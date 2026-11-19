@@ -10,6 +10,6 @@ export class VisitsTargetValidator implements ValidatorConstraintInterface {
   }
 
   defaultMessage(): string {
-    return 'targetValue must be a positive integer for VISITS missions.';
+    return 'Para metas de visitas, o valor da meta deve ser um número inteiro.';
   }
 }

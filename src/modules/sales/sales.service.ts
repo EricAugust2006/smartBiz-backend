@@ -36,24 +36,18 @@ export class SalesService {
   async create(tenantId: string, userId: string, dto: CreateSaleDto) {
     requireTenant(tenantId);
     if (!userId) throw new UnauthorizedException();
-    if (!dto.idempotencyKey) throw new BadRequestException('An idempotency key is required.');
+    if (!dto.idempotencyKey) throw new BadRequestException('A chave da venda é obrigatória.');
     if (dto.customerId != null && dto.customerPhone != null) {
-      throw new BadRequestException('Provide customerId or customerPhone, not both.');
+      throw new BadRequestException('Informe o identificador ou o telefone do cliente, não ambos.');
     }
 
     const amount = new Prisma.Decimal(dto.amount);
-    const items = [...(dto.items ?? [])].sort((a, b) => a.productId.localeCompare(b.productId));
-    if (new Set(items.map((item) => item.productId)).size !== items.length) {
-      throw new BadRequestException('Each product may appear only once.');
-    }
-    if (items.length) {
-      const total = items.reduce(
-        (sum, item) => sum.plus(new Prisma.Decimal(item.unitPrice).times(item.quantity)),
-        new Prisma.Decimal(0),
-      );
-      if (!total.equals(amount)) {
-        throw new BadRequestException('Amount must equal the sum of sale items.');
-      }
+    const items = [...(dto.items ?? [])].sort((a, b) =>
+      (a.productId ?? a.name ?? '').localeCompare(b.productId ?? b.name ?? ''),
+    );
+    const catalogProductIds = items.flatMap((item) => item.productId ? [item.productId] : []);
+    if (new Set(catalogProductIds).size !== catalogProductIds.length) {
+      throw new BadRequestException('Cada produto do catálogo pode aparecer apenas uma vez na venda.');
     }
 
     const requestHash = createHash('sha256').update(JSON.stringify({
@@ -61,17 +55,19 @@ export class SalesService {
       amount: amount.toFixed(2),
       customerId: dto.customerId ?? null,
       customerPhone: dto.customerPhone == null ? null : normalizePhone(dto.customerPhone),
-      items: items.map((item) => ({
-        productId: item.productId, quantity: item.quantity,
-        unitPrice: new Prisma.Decimal(item.unitPrice).toFixed(2),
-      })),
+      items: items.map((item) => item.productId
+        ? { productId: item.productId, quantity: item.quantity }
+        : {
+          name: item.name?.trim(), quantity: item.quantity,
+          unitPrice: item.unitPrice === undefined ? null : new Prisma.Decimal(item.unitPrice).toFixed(2),
+        }),
     })).digest('hex');
 
     try {
       return await this.prisma.$transaction(async (database) => {
         // Recheck the staff's current membership instead of trusting a stale JWT alone.
         const staff = await database.user.findFirst({ where: { tenantId, id: userId }, select: { id: true } });
-        if (!staff) throw new UnauthorizedException('Staff access is no longer valid.');
+        if (!staff) throw new UnauthorizedException('O acesso do usuário não está mais válido.');
 
         const replay = await this.findReplay(database, tenantId, dto.idempotencyKey, requestHash);
         if (replay) return replay;
@@ -82,32 +78,78 @@ export class SalesService {
             ? await this.customers.findByPhone(tenantId, dto.customerPhone, database)
             : null;
 
-        const products = items.length ? await database.product.findMany({
-          where: { tenantId, id: { in: items.map((item) => item.productId) } },
-          select: { id: true, name: true },
+        const products = catalogProductIds.length ? await database.product.findMany({
+          where: { tenantId, id: { in: catalogProductIds } },
+          select: { id: true, name: true, price: true, isActive: true, trackStock: true },
         }) : [];
-        if (products.length !== items.length) throw new NotFoundException('Product not found.');
-        const names = new Map(products.map((product) => [product.id, product.name]));
+        if (products.length !== catalogProductIds.length) throw new NotFoundException('Um ou mais produtos não foram encontrados.');
+        const productsById = new Map(products.map((product) => [product.id, product]));
+        if (products.some((product) => !product.isActive)) {
+          throw new BadRequestException('Produtos inativos não podem ser vendidos.');
+        }
+
+        const finalizedItems = items.map((item) => {
+          if (item.productId) {
+            const product = productsById.get(item.productId);
+            if (!product) throw new NotFoundException('Produto não encontrado.');
+            return {
+              productId: product.id,
+              name: product.name,
+              quantity: item.quantity,
+              unitPrice: product.price,
+              trackStock: product.trackStock,
+            };
+          }
+          if (!item.name?.trim() || item.unitPrice === undefined) {
+            throw new BadRequestException('Item avulso precisa de nome e preço unitário.');
+          }
+          return {
+            productId: null,
+            name: item.name.trim(),
+            quantity: item.quantity,
+            unitPrice: new Prisma.Decimal(item.unitPrice),
+            trackStock: false,
+          };
+        });
+
+        if (finalizedItems.length) {
+          const total = finalizedItems.reduce(
+            (sum, item) => sum.plus(item.unitPrice.times(item.quantity).toDecimalPlaces(2)),
+            new Prisma.Decimal(0),
+          );
+          if (!total.equals(amount)) {
+            throw new BadRequestException('O valor da venda deve corresponder à soma dos itens.');
+          }
+        }
 
         const sale = await database.transaction.create({
           data: {
             tenantId, customerId: customer?.id, createdById: staff.id,
             amount, type: 'SALE', idempotencyKey: dto.idempotencyKey, requestHash,
             items: {
-              create: items.map((item) => ({
-                tenantId, productId: item.productId, name: names.get(item.productId)!,
-                quantity: item.quantity, unitPrice: new Prisma.Decimal(item.unitPrice),
+              create: finalizedItems.map((item) => ({
+                productId: item.productId, name: item.name,
+                quantity: item.quantity, unitPrice: item.unitPrice,
               })),
             },
           },
           select: saleSelect,
         });
 
+        for (const item of finalizedItems) {
+          if (!item.productId || !item.trackStock) continue;
+          await database.product.update({
+            where: { tenantId, id: item.productId },
+            data: { quantity: { decrement: new Prisma.Decimal(item.quantity) } },
+            select: { id: true },
+          });
+        }
+
         if (!customer) {
           const tenant = await database.tenant.findUnique({
             where: { id: tenantId }, select: { slug: true },
           });
-          if (!tenant) throw new NotFoundException('Store not found.');
+          if (!tenant) throw new NotFoundException('Loja não encontrada.');
           const redemptionId = randomUUID();
           const expiresAt = new Date(sale.createdAt.getTime() + SALE_QR_TTL_MS);
           await database.saleRedemption.create({
@@ -142,7 +184,7 @@ export class SalesService {
         return sale;
       });
     } catch (error) {
-      // Concurrent submissions can race on the unique tenant/key constraint.
+      // Submissions can race on the unique tenant/key constraint.
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         const replay = await this.findReplay(this.prisma, tenantId, dto.idempotencyKey, requestHash);
         if (replay) return replay;
@@ -162,7 +204,7 @@ export class SalesService {
     });
     if (!existing) return null;
     if (existing.requestHash !== requestHash) {
-      throw new ConflictException('Idempotency key was already used for a different sale.');
+      throw new ConflictException('A chave da venda já foi usada em uma venda diferente.');
     }
     const { requestHash: _hash, ...sale } = existing;
     if (sale.customerId !== null) return sale;
